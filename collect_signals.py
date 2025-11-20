@@ -73,7 +73,11 @@ class SignalCollector:
                 ORDER BY time
             """
 
-            price_df = self.db_manager.execute_query(price_query, (pair, interval, start_date.timestamp()*1000, end_date.timestamp()*1000))
+            # Convert timestamps to integers to avoid scientific notation issues
+            start_timestamp = int(start_date.timestamp() * 1000)
+            end_timestamp = int(end_date.timestamp() * 1000)
+
+            price_df = self.db_manager.execute_query(price_query, (pair, interval, start_timestamp, end_timestamp))
 
             if price_df.empty:
                 print(f"⚠️  No price data found for {symbol} {pair} {interval}")
@@ -91,12 +95,12 @@ class SignalCollector:
             oi_query = """
                 SELECT time as timestamp, close as open_interest
                 FROM cg_open_interest_aggregated_history
-                WHERE symbol = %s AND interval = %s
+                WHERE symbol = %s AND `interval` = %s
                   AND time BETWEEN %s AND %s
                 ORDER BY time
             """
 
-            oi_df = self.db_manager.execute_query(oi_query, (symbol, interval, start_date.timestamp()*1000, end_date.timestamp()*1000))
+            oi_df = self.db_manager.execute_query(oi_query, (symbol, interval, start_timestamp, end_timestamp))
             if not oi_df.empty:
                 oi_df['timestamp'] = pd.to_datetime(oi_df['timestamp'], unit='ms')
                 oi_df.set_index('timestamp', inplace=True)
@@ -115,12 +119,12 @@ class SignalCollector:
                        aggregated_long_liquidation_usd,
                        aggregated_short_liquidation_usd
                 FROM cg_liquidation_aggregated_history
-                WHERE symbol = %s AND interval = %s
+                WHERE symbol = %s AND `interval` = %s
                   AND time BETWEEN %s AND %s
                 ORDER BY time
             """
 
-            liq_df = self.db_manager.execute_query(liq_query, (symbol, interval, start_date.timestamp()*1000, end_date.timestamp()*1000))
+            liq_df = self.db_manager.execute_query(liq_query, (symbol, interval, start_timestamp, end_timestamp))
             if not liq_df.empty:
                 liq_df['timestamp'] = pd.to_datetime(liq_df['timestamp'], unit='ms')
                 liq_df.set_index('timestamp', inplace=True)
@@ -143,12 +147,12 @@ class SignalCollector:
                        aggregated_buy_volume_usd,
                        aggregated_sell_volume_usd
                 FROM cg_spot_aggregated_taker_volume_history
-                WHERE symbol = %s AND interval = %s
+                WHERE symbol = %s AND `interval` = %s
                   AND time BETWEEN %s AND %s
                 ORDER BY time
             """
 
-            vol_df = self.db_manager.execute_query(volume_query, (symbol, interval, start_date.timestamp()*1000, end_date.timestamp()*1000))
+            vol_df = self.db_manager.execute_query(volume_query, (symbol, interval, start_timestamp, end_timestamp))
             if not vol_df.empty:
                 vol_df['timestamp'] = pd.to_datetime(vol_df['timestamp'], unit='ms')
                 vol_df.set_index('timestamp', inplace=True)
@@ -171,12 +175,12 @@ class SignalCollector:
             funding_query = """
                 SELECT time as timestamp, close as funding_rate
                 FROM cg_funding_rate_history
-                WHERE pair = %s AND interval = %s
+                WHERE pair = %s AND `interval` = %s
                   AND time BETWEEN %s AND %s
                 ORDER BY time
             """
 
-            funding_df = self.db_manager.execute_query(funding_query, (pair, interval, start_date.timestamp()*1000, end_date.timestamp()*1000))
+            funding_df = self.db_manager.execute_query(funding_query, (pair, interval, start_timestamp, end_timestamp))
             if not funding_df.empty:
                 funding_df['timestamp'] = pd.to_datetime(funding_df['timestamp'], unit='ms')
                 funding_df.set_index('timestamp', inplace=True)
@@ -193,12 +197,12 @@ class SignalCollector:
             top_ratio_query = """
                 SELECT time as timestamp, top_account_long_short_ratio
                 FROM cg_long_short_top_account_ratio_history
-                WHERE pair = %s AND interval = %s
+                WHERE pair = %s AND `interval` = %s
                   AND time BETWEEN %s AND %s
                 ORDER BY time
             """
 
-            top_ratio_df = self.db_manager.execute_query(top_ratio_query, (pair, interval, start_date.timestamp()*1000, end_date.timestamp()*1000))
+            top_ratio_df = self.db_manager.execute_query(top_ratio_query, (pair, interval, start_timestamp, end_timestamp))
             if not top_ratio_df.empty:
                 top_ratio_df['timestamp'] = pd.to_datetime(top_ratio_df['timestamp'], unit='ms')
                 top_ratio_df.set_index('timestamp', inplace=True)
@@ -215,12 +219,12 @@ class SignalCollector:
             global_ratio_query = """
                 SELECT time as timestamp, global_account_long_short_ratio
                 FROM cg_long_short_global_account_ratio_history
-                WHERE pair = %s AND interval = %s
+                WHERE pair = %s AND `interval` = %s
                   AND time BETWEEN %s AND %s
                 ORDER BY time
             """
 
-            global_ratio_df = self.db_manager.execute_query(global_ratio_query, (pair, interval, start_date.timestamp()*1000, end_date.timestamp()*1000))
+            global_ratio_df = self.db_manager.execute_query(global_ratio_query, (pair, interval, start_timestamp, end_timestamp))
             if not global_ratio_df.empty:
                 global_ratio_df['timestamp'] = pd.to_datetime(global_ratio_df['timestamp'], unit='ms')
                 global_ratio_df.set_index('timestamp', inplace=True)
