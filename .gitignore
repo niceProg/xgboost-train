@@ -1,0 +1,75 @@
+# Environment variables
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Data files
+*.csv
+*.parquet
+data/
+results/
+models/
+plots/
+reports/
+
+# Jupyter
+.ipynb_checkpoints
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Other
+.env.local
+.env.*.local
+.env
+
+export/
+*.sql
+
+img/
+*.png
+*.jpeg
+
+.xgboostvenv/
