@@ -106,7 +106,7 @@ class SignalCollector:
                 oi_df.set_index('timestamp', inplace=True)
                 oi_df['open_interest'] = pd.to_numeric(oi_df['open_interest'], errors='coerce')
                 price_df = price_df.join(oi_df, how='left')
-                price_df['open_interest'].fillna(method='ffill', inplace=True)
+                price_df['open_interest'] = price_df['open_interest'].ffill()
                 price_df['open_interest'].fillna(0, inplace=True)
                 print(f"✅ Added open interest data")
             else:
@@ -186,7 +186,7 @@ class SignalCollector:
                 funding_df.set_index('timestamp', inplace=True)
                 funding_df['funding_rate'] = pd.to_numeric(funding_df['funding_rate'], errors='coerce')
                 price_df = price_df.join(funding_df, how='left')
-                price_df['funding_rate'].fillna(method='ffill', inplace=True)
+                price_df['funding_rate'] = price_df['funding_rate'].ffill()
                 price_df['funding_rate'].fillna(0, inplace=True)
                 print(f"✅ Added funding rate data")
             else:
@@ -208,7 +208,7 @@ class SignalCollector:
                 top_ratio_df.set_index('timestamp', inplace=True)
                 top_ratio_df['top_account_long_short_ratio'] = pd.to_numeric(top_ratio_df['top_account_long_short_ratio'], errors='coerce')
                 price_df = price_df.join(top_ratio_df, how='left')
-                price_df['top_account_long_short_ratio'].fillna(method='ffill', inplace=True)
+                price_df['top_account_long_short_ratio'] = price_df['top_account_long_short_ratio'].ffill()
                 price_df['top_account_long_short_ratio'].fillna(1.0, inplace=True)  # Neutral ratio
                 print(f"✅ Added top account ratio data")
             else:
@@ -230,7 +230,7 @@ class SignalCollector:
                 global_ratio_df.set_index('timestamp', inplace=True)
                 global_ratio_df['global_account_long_short_ratio'] = pd.to_numeric(global_ratio_df['global_account_long_short_ratio'], errors='coerce')
                 price_df = price_df.join(global_ratio_df, how='left')
-                price_df['global_account_long_short_ratio'].fillna(method='ffill', inplace=True)
+                price_df['global_account_long_short_ratio'] = price_df['global_account_long_short_ratio'].ffill()
                 price_df['global_account_long_short_ratio'].fillna(1.0, inplace=True)  # Neutral ratio
                 print(f"✅ Added global account ratio data")
             else:
@@ -266,7 +266,7 @@ class SignalCollector:
                 price_df = price_df.join(orderbook_df, how='left')
                 # Forward fill microstructure features
                 for col in ['total_depth', 'bid_ask_imbalance', 'liquidity_ratio', 'orderbook_spread']:
-                    price_df[col].fillna(method='ffill', inplace=True)
+                    price_df[col] = price_df[col].ffill()
                     price_df[col].fillna(0, inplace=True)
 
                 print(f"✅ Added spot orderbook microstructure data")
@@ -304,7 +304,7 @@ class SignalCollector:
                 price_df = price_df.join(basis_df, how='left')
                 # Forward fill basis features
                 for col in ['open_basis', 'close_basis', 'basis_momentum', 'basis_volatility', 'positive_basis', 'basis_trend']:
-                    price_df[col].fillna(method='ffill', inplace=True)
+                    price_df[col] = price_df[col].ffill()
                     price_df[col].fillna(0, inplace=True)
 
                 print(f"✅ Added futures basis data")
@@ -349,7 +349,7 @@ class SignalCollector:
                 price_df = price_df.join(footprint_df, how='left')
                 # Forward fill footprint features
                 for col in ['volume_aggression', 'trade_aggression', 'price_impact', 'aggressive_volume_ratio']:
-                    price_df[col].fillna(method='ffill', inplace=True)
+                    price_df[col] = price_df[col].ffill()
                     price_df[col].fillna(0, inplace=True)
 
                 print(f"✅ Added futures footprint data")
@@ -366,8 +366,9 @@ class SignalCollector:
                        SUM(e.open_interest) as total_oi,
                        COUNT(DISTINCT e.exchange) as exchange_count
                 FROM cg_option_exchange_oi_history_time_list o
-                JOIN cg_option_exchange_oi_history_exchange_data e ON o.option_exchange_oi_history_id = e.id
-                WHERE o.symbol = %s AND o.timestamp BETWEEN %s AND %s
+                JOIN cg_option_exchange_oi_history_exchange_data e ON o.option_exchange_oi_history_id = e.option_exchange_oi_history_id
+                JOIN cg_option_exchange_oi_history main ON o.option_exchange_oi_history_id = main.id
+                WHERE main.symbol = %s AND o.timestamp BETWEEN %s AND %s
                 GROUP BY o.timestamp, o.price
                 ORDER BY o.timestamp
             """
@@ -389,7 +390,7 @@ class SignalCollector:
                 price_df = price_df.join(options_df, how='left')
                 # Forward fill options features
                 for col in ['total_oi', 'oi_change', 'oi_volatility', 'exchange_diversification']:
-                    price_df[col].fillna(method='ffill', inplace=True)
+                    price_df[col] = price_df[col].ffill()
                     price_df[col].fillna(0, inplace=True)
 
                 print(f"✅ Added options OI data")
