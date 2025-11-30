@@ -286,8 +286,8 @@ class FeatureEngineer:
         return df
 
     def _create_multi_source_features(self, df):
-        """Create comprehensive features from multiple data sources"""
-        print("🔧 Creating multi-source market features...")
+        """Create comprehensive features from multiple data sources including the 4 new critical tables"""
+        print("🔧 Creating enhanced multi-source market features with new microstructure data...")
 
         # 1. Enhanced Open Interest Features
         if 'open_interest' in df.columns:
@@ -411,17 +411,162 @@ class FeatureEngineer:
 
             print("✅ Enhanced crowd sentiment features added")
 
-        # 7. Composite Indicators
-        df = self._create_composite_indicators(df)
+        # 8. NEW: Spot Orderbook Microstructure Features (Tier 1 - EXTREMELY HIGH impact)
+        if all(col in df.columns for col in ['total_depth', 'bid_ask_imbalance', 'liquidity_ratio', 'orderbook_spread']):
+            window = min(10, max(2, len(df) // 5))
 
-        # 8. Cross-Asset Interaction Features
-        df = self._create_interaction_features(df)
+            # Liquidity depth analysis
+            df['depth_sma'] = df['total_depth'].rolling(window=window, min_periods=1).mean()
+            df['depth_ratio'] = df['total_depth'] / df['depth_sma'].replace(0, 1e-8)
+            df['depth_volatility'] = df['total_depth'].rolling(window=window, min_periods=1).std()
 
-        print("✅ Multi-source feature engineering completed")
+            # Order imbalance signals (VERY POWERFUL for entry timing)
+            df['imbalance_sma'] = df['bid_ask_imbalance'].rolling(window=window, min_periods=1).mean()
+            df['imbchange'] = df['bid_ask_imbalance'].diff()
+            df['strong_bid_pressure'] = (df['bid_ask_imbalance'] > 0.2).astype(int)  # Bids dominate
+            df['strong_ask_pressure'] = (df['bid_ask_imbalance'] < -0.2).astype(int)  # Asks dominate
+
+            # Liquidity crunch indicators
+            df['liquidity_sma'] = df['liquidity_ratio'].rolling(window=window, min_periods=1).mean()
+            df['liquidity_spike'] = (abs(df['liquidity_ratio'] - df['liquidity_sma']) > 0.5).astype(int)
+
+            # Spread analysis for market efficiency
+            df['spread_sma'] = df['orderbook_spread'].rolling(window=window, min_periods=1).mean()
+            df['spread_widening'] = (df['orderbook_spread'] > df['spread_sma'] * 1.5).astype(int)
+            df['spread_narrowing'] = (df['orderbook_spread'] < df['spread_sma'] * 0.7).astype(int)
+
+            # Orderbook momentum (leading indicator for price moves)
+            df['orderbook_momentum'] = df['bid_ask_imbalance'].rolling(window=3).mean()
+            df['orderbook_acceleration'] = df['orderbook_momentum'].diff()
+
+            print("✅ Enhanced orderbook microstructure features added")
+
+        # 9. NEW: Futures Basis Arbitrage Features (Tier 1 - EXTREMELY HIGH impact)
+        if all(col in df.columns for col in ['open_basis', 'close_basis', 'basis_momentum', 'basis_volatility']):
+            window = min(15, max(2, len(df) // 3))
+
+            # Basis trend analysis (institutional positioning)
+            df['basis_sma'] = df['close_basis'].rolling(window=window, min_periods=1).mean()
+            df['basis_ratio'] = df['close_basis'] / (abs(df['basis_sma']) + 1e-8)
+
+            # Basis momentum (leading indicator for spot)
+            df['basis_momentum_sma'] = df['basis_momentum'].rolling(window=window, min_periods=1).mean()
+            df['basis_acceleration'] = df['basis_momentum'].diff()
+            df['basis_reversal'] = (df['basis_momentum'] * df['basis_momentum'].shift(1) < 0).astype(int)  # Sign change
+
+            # Volatility regime detection
+            df['basis_vol_regime'] = np.where(df['basis_volatility'] > df['basis_volatility'].rolling(window=window).mean() * 1.5, 2, 1)
+            df['basis_calm_regime'] = (df['basis_volatility'] < df['basis_volatility'].rolling(window=window).mean() * 0.7).astype(int)
+
+            # Arbitrage opportunity signals
+            df['wide_basis'] = (abs(df['close_basis']) > abs(df['basis_sma']) * 2).astype(int)
+            df['extreme_basis'] = (abs(df['close_basis']) > abs(df['basis_sma']) * 3).astype(int)
+
+            # Contango/Backwardation regime
+            df['contango_regime'] = (df['close_basis'] > 0).astype(int)
+            df['backwardation_regime'] = (df['close_basis'] < 0).astype(int)
+            df['regime_change'] = df['contango_regime'].diff().fillna(0).abs()  # 1 when regime changes
+
+            # Basis vs price divergence (powerful signal)
+            if 'returns' in df.columns:
+                df['basis_price_divergence'] = np.sign(df['basis_momentum'] * df['returns'])  # Negative = reversal signal
+                df['divergence_strength'] = abs(df['basis_momentum'] * df['returns'])
+
+            print("✅ Enhanced futures basis arbitrage features added")
+
+        # 10. NEW: Futures Footprint Trade Aggressiveness Features (Tier 2 - VERY HIGH impact)
+        if all(col in df.columns for col in ['volume_aggression', 'trade_aggression', 'price_impact', 'aggressive_volume_ratio']):
+            window = min(8, max(2, len(df) // 6))
+
+            # Volume aggression analysis
+            df['vol_aggression_sma'] = df['volume_aggression'].rolling(window=window, min_periods=1).mean()
+            df['vol_aggression_volatility'] = df['volume_aggression'].rolling(window=window, min_periods=1).std()
+            df['aggressive_buying'] = (df['volume_aggression'] > 0.3).astype(int)
+            df['aggressive_selling'] = (df['volume_aggression'] < -0.3).astype(int)
+
+            # Trade aggression (size vs frequency)
+            df['trade_aggression_sma'] = df['trade_aggression'].rolling(window=window, min_periods=1).mean()
+            df['institutional_buying'] = (df['trade_aggression'] > 0.2).astype(int)  # Large trades dominate
+            df['retail_buying'] = (df['trade_aggression'] < -0.2).astype(int)  # Many small trades
+
+            # Price impact analysis (execution quality)
+            df['price_impact_sma'] = df['price_impact'].rolling(window=window, min_periods=1).mean()
+            df['high_impact_buying'] = (df['price_impact'] > df['price_impact_sma'] * 1.5).astype(int)
+            df['high_impact_selling'] = (df['price_impact'] < df['price_impact_sma'] * 1.5).astype(int)
+
+            # Aggressive volume participation
+            df['agg_volume_ratio_sma'] = df['aggressive_volume_ratio'].rolling(window=window, min_periods=1).mean()
+            df['aggressive_volume_spike'] = (df['aggressive_volume_ratio'] > df['agg_volume_ratio_sma'] * 2).astype(int)
+
+            # Composite aggressiveness score (0-1)
+            aggression_components = []
+            if 'volume_aggression' in df.columns:
+                aggression_components.append(np.clip(df['volume_aggression'] + 0.5, 0, 1))
+            if 'trade_aggression' in df.columns:
+                aggression_components.append(np.clip(df['trade_aggression'] + 0.5, 0, 1))
+            if 'price_impact' in df.columns:
+                aggression_components.append(np.clip(abs(df['price_impact']) * 10, 0, 1))
+
+            if aggression_components:
+                df['composite_aggressiveness'] = sum(aggression_components) / len(aggression_components)
+
+            # Aggressiveness momentum (predictive of continued moves)
+            df['aggressiveness_momentum'] = df['composite_aggressiveness'].rolling(window=3).mean()
+            df['aggressiveness_acceleration'] = df['aggressiveness_momentum'].diff()
+
+            print("✅ Enhanced futures footprint aggressiveness features added")
+
+        # 11. NEW: Options Exchange OI Features (Tier 2 - VERY HIGH impact)
+        if all(col in df.columns for col in ['total_oi', 'oi_change', 'oi_volatility', 'exchange_diversification']):
+            window = min(12, max(2, len(df) // 4))
+
+            # Options OI momentum
+            df['options_oi_sma'] = df['total_oi'].rolling(window=window, min_periods=1).mean()
+            df['options_oi_ratio'] = df['total_oi'] / df['options_oi_sma'].replace(0, 1e-8)
+            df['options_oi_roc'] = df['total_oi'].pct_change(window)
+
+            # Options volatility regime
+            df['options_vol_sma'] = df['oi_volatility'].rolling(window=window, min_periods=1).mean()
+            df['options_vol_ratio'] = df['oi_volatility'] / df['options_vol_sma'].replace(0, 1e-8)
+            df['options_vol_spike'] = (df['oi_volatility'] > df['options_vol_sma'] * 1.5).astype(int)
+
+            # Exchange diversification benefits
+            df['exchange_diversification_sma'] = df['exchange_diversification'].rolling(window=window, min_periods=1).mean()
+            df['high_diversification'] = (df['exchange_diversification'] > 0.6).astype(int)  # Diversified OI = healthier
+
+            # Options OI change patterns
+            df['oi_accumulation'] = (df['oi_change'] > 0).rolling(window=window).sum() / window
+            df['oi_distribution'] = (df['oi_change'] < 0).rolling(window=window).sum() / window
+            df['oi_trend_strength'] = abs(df['oi_accumulation'] - df['oi_distribution'])
+
+            # Options vs Spot correlation (contrarian signals)
+            if 'returns' in df.columns:
+                df['options_spot_correlation'] = np.sign(df['oi_change'] * df['returns'])
+                df['options_divergence'] = (df['options_spot_correlation'] < 0).astype(int)  # Divergence = reversal
+
+            # Options extreme levels (potential max pain)
+            df['extreme_oi'] = (df['total_oi'] > df['options_oi_sma'] * 2).astype(int)
+            df['oi_exhaustion'] = (df['total_oi'] < df['options_oi_sma'] * 0.5).astype(int)
+
+            # Options institutional activity
+            df['institutional_options'] = (df['exchange_diversification'] > 0.8) & (df['total_oi'] > df['options_oi_sma'])
+            df['institutional_options'] = df['institutional_options'].astype(int)
+
+            print("✅ Enhanced options exchange OI features added")
+
+        # 12. Composite Indicators (Now enhanced with new microstructure data)
+        df = self._create_enhanced_composite_indicators(df)
+
+        # 13. Cross-Asset Interaction Features (Now with new microstructure interactions)
+        df = self._create_enhanced_interaction_features(df)
+
+        print("✅ Enhanced multi-source feature engineering completed")
+        print(f"📈 Total features created: {len(df.columns)}")
+        print(f"🔬 Includes: Orderbook Microstructure, Futures Basis, Footprint Analysis, Options OI")
         return df
 
-    def _create_composite_indicators(self, df):
-        """Create composite indicators from multiple data sources"""
+    def _create_enhanced_composite_indicators(self, df):
+        """Create enhanced composite indicators including new microstructure data"""
         try:
             # Market Structure Score (0-1, higher = bullish structure)
             structure_score = 0.5  # Base neutral
@@ -459,22 +604,132 @@ class FeatureEngineer:
 
                 df['market_regime'] = np.where(bull_condition, 2, np.where(bear_condition, 0, 1))  # 2=Bull, 1=Neutral, 0=Bear
 
-            # Risk-On/Risk-Off Indicator
+            # Risk-On/Risk-Off Indicator (ENHANCED with new data)
             if 'total_taker_volume' in df.columns and 'open_interest' in df.columns:
-                # High volume + rising OI = Risk On
-                # Low volume + falling OI = Risk Off
+                # Enhanced version with orderbook depth and basis
                 volume_oi_trend = (df['taker_volume_intensity'] > 1.0) & (df['oi_ratio'] > 1.0)
                 df['risk_on_indicator'] = volume_oi_trend.astype(int)
 
-            print("✅ Composite indicators created")
+            # NEW: Enhanced Market Structure Score with microstructure data
+            if all(col in df.columns for col in ['buy_sell_ratio', 'bid_ask_imbalance', 'basis_momentum', 'volume_aggression']):
+                # Enhanced structure calculation with new microstructure inputs
+                structure_components = {
+                    'volume_pressure': (df['buy_sell_ratio'] - 0.5) * 0.25,
+                    'orderbook_pressure': df['bid_ask_imbalance'] * 0.3,  # Higher weight - very predictive
+                    'basis_pressure': np.sign(df['basis_momentum']) * abs(df['basis_momentum']) * 0.2,
+                    'aggression_pressure': df['volume_aggression'] * 0.15,
+                    'oi_pressure': (df['oi_ratio'] - 1.0) * 0.1
+                }
+
+                enhanced_structure_score = 0.5 + sum(structure_components.values())
+                df['enhanced_market_structure_score'] = np.clip(enhanced_structure_score, 0, 1)
+
+            # NEW: Microstructure Efficiency Score (0-1, higher = more efficient market)
+            if all(col in df.columns for col in ['orderbook_spread', 'price_impact', 'depth_ratio']):
+                # Lower spread + lower impact + higher depth = more efficient
+                efficiency_components = []
+
+                # Spread efficiency (inverse)
+                if 'orderbook_spread' in df.columns:
+                    spread_norm = 1 - np.clip(df['orderbook_spread'] / df['orderbook_spread'].rolling(20).mean(), 0, 1)
+                    efficiency_components.append(spread_norm)
+
+                # Impact efficiency (inverse)
+                if 'price_impact' in df.columns:
+                    impact_norm = 1 - np.clip(abs(df['price_impact']) / (abs(df['price_impact']).rolling(20).mean() + 1e-8), 0, 1)
+                    efficiency_components.append(impact_norm)
+
+                # Depth efficiency (direct)
+                if 'depth_ratio' in df.columns:
+                    depth_norm = np.clip(df['depth_ratio'] / 2, 0, 1)  # Cap at 2x average
+                    efficiency_components.append(depth_norm)
+
+                if efficiency_components:
+                    df['microstructure_efficiency'] = sum(efficiency_components) / len(efficiency_components)
+
+            # NEW: Institutional Activity Composite
+            if all(col in df.columns for col in ['top_account_long_short_ratio', 'trade_aggression', 'basis_momentum']):
+                # High institutional activity detection
+                institutional_signals = []
+
+                # Smart money positioning
+                if 'top_account_long_short_ratio' in df.columns:
+                    smart_money_extreme = (abs(df['top_account_long_short_ratio'] - 1.0) > 0.3).astype(float)
+                    institutional_signals.append(smart_money_extreme)
+
+                # Institutional trade size
+                if 'trade_aggression' in df.columns:
+                    large_trades = (df['trade_aggression'] > 0.2).astype(float)
+                    institutional_signals.append(large_trades)
+
+                # Institutional futures positioning
+                if 'basis_momentum' in df.columns:
+                    basis_activity = (abs(df['basis_momentum']) > abs(df['basis_momentum']).rolling(20).std()).astype(float)
+                    institutional_signals.append(basis_activity)
+
+                if institutional_signals:
+                    df['institutional_activity_composite'] = sum(institutional_signals) / len(institutional_signals)
+
+            # NEW: Market Regime Classifier (ENHANCED with microstructure data)
+            if all(col in df.columns for col in ['buy_sell_ratio', 'bid_ask_imbalance', 'basis_momentum', 'vol_aggression_sma']):
+                # Enhanced regime classification using microstructure data
+
+                # Strong Bull Regime: Strong buying + bid pressure + positive basis + moderate aggression
+                strong_bull = (df['buy_sell_ratio'] > 0.6) & \
+                             (df['bid_ask_imbalance'] > 0.1) & \
+                             (df['basis_momentum'] > 0) & \
+                             (abs(df['vol_aggression_sma']) < 0.3)
+
+                # Strong Bear Regime: Strong selling + ask pressure + negative basis + moderate aggression
+                strong_bear = (df['buy_sell_ratio'] < 0.4) & \
+                             (df['bid_ask_imbalance'] < -0.1) & \
+                             (df['basis_momentum'] < 0) & \
+                             (abs(df['vol_aggression_sma']) < 0.3)
+
+                # Volatile Regime: High aggression + wide spreads + volatile basis
+                volatile = ((abs(df['vol_aggression_sma']) > 0.4) |
+                           (df['orderbook_spread'] > df['orderbook_spread'].rolling(20).mean() * 1.5) |
+                           (df['basis_volatility'] > df['basis_volatility'].rolling(20).mean() * 1.5))
+
+                df['enhanced_market_regime'] = np.where(strong_bull, 3,  # Strong Bull
+                                             np.where(strong_bear, 0,   # Strong Bear
+                                             np.where(volatile, 2, 1))) # Volatile/Neutral
+
+            # NEW: Predictive Signal Strength (Composite of leading indicators)
+            leading_indicators = []
+
+            # Orderbook pressure (leading)
+            if 'bid_ask_imbalance' in df.columns:
+                orderbook_signal = np.clip(df['bid_ask_imbalance'] * 2 + 0.5, 0, 1)
+                leading_indicators.append(orderbook_signal * 0.35)
+
+            # Basis momentum (leading)
+            if 'basis_momentum' in df.columns:
+                basis_signal = np.clip(np.sign(df['basis_momentum']) * abs(df['basis_momentum']) * 10 + 0.5, 0, 1)
+                leading_indicators.append(basis_signal * 0.30)
+
+            # Aggressiveness (confirming)
+            if 'composite_aggressiveness' in df.columns:
+                aggression_signal = df['composite_aggressiveness']
+                leading_indicators.append(aggression_signal * 0.20)
+
+            # Options OI (confirming)
+            if 'options_oi_ratio' in df.columns:
+                options_signal = np.clip(df['options_oi_ratio'] / 2 + 0.5, 0, 1)
+                leading_indicators.append(options_signal * 0.15)
+
+            if leading_indicators:
+                df['predictive_signal_strength'] = sum(leading_indicators)
+
+            print("✅ Enhanced composite indicators created with microstructure data")
 
         except Exception as e:
-            print(f"⚠️  Error creating composite indicators: {e}")
+            print(f"⚠️  Error creating enhanced composite indicators: {e}")
 
         return df
 
-    def _create_interaction_features(self, df):
-        """Create interaction features between different data sources"""
+    def _create_enhanced_interaction_features(self, df):
+        """Create enhanced interaction features including new microstructure interactions"""
         try:
             # Volume vs Open Interest interaction
             if 'buy_sell_ratio' in df.columns and 'oi_ratio' in df.columns:
@@ -499,10 +754,98 @@ class FeatureEngineer:
                 df['structure_alignment'] = np.sign(df['returns']) * (df['market_structure_score'] - 0.5) * 2
                 df['structure_conflict'] = (abs(df['structure_alignment']) < 0.1).astype(int)
 
-            print("✅ Interaction features created")
+            # NEW: Orderbook microstructure interactions
+            if all(col in df.columns for col in ['bid_ask_imbalance', 'total_depth', 'orderbook_spread']):
+                # Depth vs Imbalance (liquidity under pressure)
+                df['depth_imbalance_interaction'] = df['bid_ask_imbalance'] * np.log1p(df['total_depth'])
+
+                # Spread vs Imbalance (market maker positioning)
+                df['spread_imbalance_interaction'] = abs(df['bid_ask_imbalance']) * df['orderbook_spread']
+                df['tight_spread_imbalance'] = (df['orderbook_spread'] < df['orderbook_spread'].rolling(20).mean() * 0.8) & (abs(df['bid_ask_imbalance']) > 0.1)
+
+                # Liquidity crunch indicator
+                df['liquidity_crunch'] = (df['depth_ratio'] < 0.5) & (abs(df['bid_ask_imbalance']) > 0.2)
+
+            # NEW: Futures Basis microstructure interactions
+            if all(col in df.columns for col in ['basis_momentum', 'bid_ask_imbalance', 'volume_aggression']):
+                # Basis vs Orderbook pressure (arbitrage opportunities)
+                df['basis_orderbook_alignment'] = np.sign(df['basis_momentum']) * df['bid_ask_imbalance']
+                df['basis_orderbook_divergence'] = abs(df['basis_momentum'] * df['bid_ask_imbalance'])  # High = opportunity
+
+                # Basis vs Aggressiveness (institutional confirmation)
+                df['basis_aggression_confirmation'] = np.sign(df['basis_momentum']) * df['volume_aggression']
+                df['basis_aggression_divergence'] = (np.sign(df['basis_momentum']) != np.sign(df['volume_aggression'])).astype(int)
+
+            # NEW: Footprint vs Orderbook interactions
+            if all(col in df.columns for col in ['volume_aggression', 'trade_aggression', 'bid_ask_imbalance']):
+                # Aggressive flow vs orderbook pressure
+                df['aggression_orderbook_alignment'] = df['volume_aggression'] * df['bid_ask_imbalance']
+                df['aggression_orderbook_resistance'] = (abs(df['volume_aggression']) > 0.3) & (abs(df['bid_ask_imbalance']) < 0.05)  # High aggression meets thin orderbook
+
+                # Trade size vs market depth
+                df['trade_size_depth_impact'] = abs(df['trade_aggression']) / (df['depth_ratio'] + 1e-8)
+                df['large_trade_low_depth'] = (abs(df['trade_aggression']) > 0.2) & (df['depth_ratio'] < 0.8)
+
+            # NEW: Options OI vs microstructure interactions
+            if all(col in df.columns for col in ['total_oi', 'options_oi_ratio', 'basis_momentum', 'volume_aggression']):
+                # Options OI vs futures basis (institutional positioning)
+                df['options_basis_alignment'] = np.sign(df['options_oi_ratio'] - 1.0) * np.sign(df['basis_momentum'])
+                df['options_basis_divergence'] = (np.sign(df['options_oi_ratio'] - 1.0) != np.sign(df['basis_momentum'])).astype(int)
+
+                # Options OI vs spot aggressiveness
+                df['options_aggression_confirmation'] = np.sign(df['options_oi_ratio'] - 1.0) * df['volume_aggression']
+                df['options_aggression_divergence'] = (np.sign(df['options_oi_ratio'] - 1.0) != np.sign(df['volume_aggression'])).astype(int)
+
+            # NEW: Enhanced liquidation microstructure interactions
+            if all(col in df.columns for col in ['liquidation_ratio', 'bid_ask_imbalance', 'depth_ratio']):
+                # Liquidations vs orderbook imbalance
+                df['liquidation_orderbook_catalyst'] = df['liquidation_ratio'] * abs(df['bid_ask_imbalance'])
+                df['liquidation_cascade_risk'] = (df['liquidation_ratio'] > 2.0) & (df['depth_ratio'] < 0.5)  # High liquidations + low depth = cascade risk
+
+            # NEW: Enhanced funding rate microstructure interactions
+            if all(col in df.columns for col in ['funding_rate', 'basis_momentum', 'depth_ratio']):
+                # Funding vs basis (arbitrage efficiency)
+                df['funding_basis_arbitrage'] = abs(df['funding_rate'] - df['basis_momentum'])
+                df['funding_basis_inefficiency'] = (df['funding_basis_arbitrage'] > df['funding_basis_arbitrage'].rolling(20).std()).astype(int)
+
+            # NEW: Three-way interactions for complex market conditions
+            if all(col in df.columns for col in ['bid_ask_imbalance', 'basis_momentum', 'volume_aggression']):
+                # Perfect storm: Orderbook + Basis + Aggression alignment
+                momentum_alignment = (np.sign(df['bid_ask_imbalance']) == np.sign(df['basis_momentum'])) & \
+                                   (np.sign(df['basis_momentum']) == np.sign(df['volume_aggression']))
+                df['perfect_storm_alignment'] = momentum_alignment.astype(int) * abs(df['bid_ask_imbalance'])
+
+                # Confluence signals (multiple indicators pointing same direction)
+                confluence_strength = abs(df['bid_ask_imbalance']) * abs(df['basis_momentum']) * abs(df['volume_aggression'])
+                df['confluence_strength'] = np.clip(confluence_strength * 10, 0, 1)
+
+            # NEW: Market efficiency vs institutional flow interactions
+            if all(col in df.columns for col in ['microstructure_efficiency', 'institutional_activity_composite', 'predictive_signal_strength']):
+                # Efficiency degradation during high institutional activity
+                df['efficiency_institutional_impact'] = df['institutional_activity_composite'] * (1 - df['microstructure_efficiency'])
+
+                # Predictive signal reliability based on market efficiency
+                df['signal_reliability_score'] = df['predictive_signal_strength'] * df['microstructure_efficiency']
+
+            # NEW: Cross-market arbitrage opportunity score
+            arbitrage_signals = []
+            if all(col in df.columns for col in ['funding_rate', 'close_basis']):
+                # Futures-Spot arbitrage
+                futures_spread_arbitrage = abs(df['close_basis'] - df['funding_rate']) > (abs(df['close_basis']).rolling(20).std())
+                arbitrage_signals.append(futures_spread_arbitrage.astype(int))
+
+            if all(col in df.columns for col in ['bid_ask_imbalance', 'volume_aggression']):
+                # Spot-Futures execution arbitrage
+                execution_arbitrage = (abs(df['bid_ask_imbalance']) > 0.15) & (abs(df['volume_aggression']) > 0.3)
+                arbitrage_signals.append(execution_arbitrage.astype(int))
+
+            if arbitrage_signals:
+                df['arbitrage_opportunity_score'] = sum(arbitrage_signals) / len(arbitrage_signals)
+
+            print("✅ Enhanced interaction features created with microstructure data")
 
         except Exception as e:
-            print(f"⚠️  Error creating interaction features: {e}")
+            print(f"⚠️  Error creating enhanced interaction features: {e}")
 
         return df
 

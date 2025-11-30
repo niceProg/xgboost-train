@@ -237,10 +237,173 @@ class SignalCollector:
                 price_df['global_account_long_short_ratio'] = 1.0
                 print(f"⚠️  No global account ratio data available")
 
+            # 8. NEW: Spot Orderbook History (Tier 1 - EXTREMELY HIGH impact)
+            orderbook_query = """
+                SELECT time as timestamp,
+                       aggregated_bids_usd, aggregated_bids_quantity,
+                       aggregated_asks_usd, aggregated_asks_quantity,
+                       range_percent
+                FROM cg_spot_aggregated_ask_bids_history
+                WHERE symbol = %s AND `interval` = %s AND time BETWEEN %s AND %s
+                ORDER BY time
+            """
+
+            orderbook_df = self.db_manager.execute_query(orderbook_query, (symbol, interval, start_timestamp, end_timestamp))
+            if not orderbook_df.empty:
+                orderbook_df['timestamp'] = pd.to_datetime(orderbook_df['timestamp'], unit='ms')
+                orderbook_df.set_index('timestamp', inplace=True)
+
+                # Convert to numeric
+                for col in ['aggregated_bids_usd', 'aggregated_bids_quantity', 'aggregated_asks_usd', 'aggregated_asks_quantity']:
+                    orderbook_df[col] = pd.to_numeric(orderbook_df[col], errors='coerce')
+
+                # Calculate orderbook microstructure features
+                orderbook_df['total_depth'] = orderbook_df['aggregated_bids_usd'] + orderbook_df['aggregated_asks_usd']
+                orderbook_df['bid_ask_imbalance'] = (orderbook_df['aggregated_bids_usd'] - orderbook_df['aggregated_asks_usd']) / (orderbook_df['total_depth'] + 1e-8)
+                orderbook_df['liquidity_ratio'] = orderbook_df['aggregated_bids_quantity'] / (orderbook_df['aggregated_asks_quantity'] + 1e-8)
+                orderbook_df['orderbook_spread'] = (orderbook_df['aggregated_asks_usd'] - orderbook_df['aggregated_bids_usd']) / (orderbook_df['total_depth'] + 1e-8)
+
+                price_df = price_df.join(orderbook_df, how='left')
+                # Forward fill microstructure features
+                for col in ['total_depth', 'bid_ask_imbalance', 'liquidity_ratio', 'orderbook_spread']:
+                    price_df[col].fillna(method='ffill', inplace=True)
+                    price_df[col].fillna(0, inplace=True)
+
+                print(f"✅ Added spot orderbook microstructure data")
+            else:
+                price_df['total_depth'] = 0
+                price_df['bid_ask_imbalance'] = 0
+                price_df['liquidity_ratio'] = 1.0
+                price_df['orderbook_spread'] = 0.01
+                print(f"⚠️  No orderbook data available")
+
+            # 9. NEW: Futures Basis History (Tier 1 - EXTREMELY HIGH impact)
+            basis_query = """
+                SELECT time as timestamp,
+                       open_basis, close_basis, open_change, close_change
+                FROM cg_futures_basis_history
+                WHERE pair = %s AND `interval` = %s AND time BETWEEN %s AND %s
+                ORDER BY time
+            """
+
+            basis_df = self.db_manager.execute_query(basis_query, (pair, interval, start_timestamp, end_timestamp))
+            if not basis_df.empty:
+                basis_df['timestamp'] = pd.to_datetime(basis_df['timestamp'], unit='ms')
+                basis_df.set_index('timestamp', inplace=True)
+
+                # Convert to numeric
+                for col in ['open_basis', 'close_basis', 'open_change', 'close_change']:
+                    basis_df[col] = pd.to_numeric(basis_df[col], errors='coerce')
+
+                # Calculate basis features
+                basis_df['basis_momentum'] = basis_df['close_basis'].diff()
+                basis_df['basis_volatility'] = basis_df['close_basis'].rolling(window=10, min_periods=1).std()
+                basis_df['positive_basis'] = (basis_df['close_basis'] > 0).astype(int)  # Contango
+                basis_df['basis_trend'] = basis_df['close_basis'].rolling(window=5, min_periods=1).mean()
+
+                price_df = price_df.join(basis_df, how='left')
+                # Forward fill basis features
+                for col in ['open_basis', 'close_basis', 'basis_momentum', 'basis_volatility', 'positive_basis', 'basis_trend']:
+                    price_df[col].fillna(method='ffill', inplace=True)
+                    price_df[col].fillna(0, inplace=True)
+
+                print(f"✅ Added futures basis data")
+            else:
+                price_df['open_basis'] = 0
+                price_df['close_basis'] = 0
+                price_df['basis_momentum'] = 0
+                price_df['basis_volatility'] = 0
+                price_df['positive_basis'] = 0
+                price_df['basis_trend'] = 0
+                print(f"⚠️  No futures basis data available")
+
+            # 10. NEW: Futures Footprint History (Tier 2 - VERY HIGH impact)
+            footprint_query = """
+                SELECT time as timestamp, price_start, price_end,
+                       taker_buy_volume, taker_sell_volume,
+                       taker_buy_trades, taker_sell_trades
+                FROM cg_futures_footprint_history
+                WHERE symbol = %s AND `interval` = %s AND time BETWEEN %s AND %s
+                ORDER BY time
+            """
+
+            footprint_df = self.db_manager.execute_query(footprint_query, (symbol, interval, start_timestamp, end_timestamp))
+            if not footprint_df.empty:
+                footprint_df['timestamp'] = pd.to_datetime(footprint_df['timestamp'], unit='ms')
+                footprint_df.set_index('timestamp', inplace=True)
+
+                # Convert to numeric
+                for col in ['price_start', 'price_end', 'taker_buy_volume', 'taker_sell_volume',
+                           'taker_buy_trades', 'taker_sell_trades']:
+                    footprint_df[col] = pd.to_numeric(footprint_df[col], errors='coerce')
+
+                # Calculate footprint/aggressiveness features
+                total_volume = footprint_df['taker_buy_volume'] + footprint_df['taker_sell_volume']
+                total_trades = footprint_df['taker_buy_trades'] + footprint_df['taker_sell_trades']
+
+                footprint_df['volume_aggression'] = (footprint_df['taker_buy_volume'] - footprint_df['taker_sell_volume']) / (total_volume + 1e-8)
+                footprint_df['trade_aggression'] = (footprint_df['taker_buy_trades'] - footprint_df['taker_sell_trades']) / (total_trades + 1e-8)
+                footprint_df['price_impact'] = (footprint_df['price_end'] - footprint_df['price_start']) / footprint_df['price_start'].replace(0, 1e-8)
+                footprint_df['aggressive_volume_ratio'] = total_volume / (price_df['volume'] + 1e-8)
+
+                price_df = price_df.join(footprint_df, how='left')
+                # Forward fill footprint features
+                for col in ['volume_aggression', 'trade_aggression', 'price_impact', 'aggressive_volume_ratio']:
+                    price_df[col].fillna(method='ffill', inplace=True)
+                    price_df[col].fillna(0, inplace=True)
+
+                print(f"✅ Added futures footprint data")
+            else:
+                price_df['volume_aggression'] = 0
+                price_df['trade_aggression'] = 0
+                price_df['price_impact'] = 0
+                price_df['aggressive_volume_ratio'] = 0.1
+                print(f"⚠️  No futures footprint data available")
+
+            # 11. NEW: Option Exchange OI History (Tier 2 - VERY HIGH impact)
+            options_oi_query = """
+                SELECT o.timestamp, o.price,
+                       SUM(e.open_interest) as total_oi,
+                       COUNT(DISTINCT e.exchange) as exchange_count
+                FROM cg_option_exchange_oi_history_time_list o
+                JOIN cg_option_exchange_oi_history_exchange_data e ON o.option_exchange_oi_history_id = e.id
+                WHERE o.symbol = %s AND o.timestamp BETWEEN %s AND %s
+                GROUP BY o.timestamp, o.price
+                ORDER BY o.timestamp
+            """
+
+            options_df = self.db_manager.execute_query(options_oi_query, (symbol, start_timestamp, end_timestamp))
+            if not options_df.empty:
+                options_df['timestamp'] = pd.to_datetime(options_df['timestamp'], unit='ms')
+                options_df.set_index('timestamp', inplace=True)
+
+                # Convert to numeric
+                for col in ['total_oi', 'exchange_count']:
+                    options_df[col] = pd.to_numeric(options_df[col], errors='coerce')
+
+                # Calculate options features
+                options_df['oi_change'] = options_df['total_oi'].diff()
+                options_df['oi_volatility'] = options_df['total_oi'].rolling(window=10, min_periods=1).std()
+                options_df['exchange_diversification'] = options_df['exchange_count'] / 5.0  # Normalize by typical exchange count
+
+                price_df = price_df.join(options_df, how='left')
+                # Forward fill options features
+                for col in ['total_oi', 'oi_change', 'oi_volatility', 'exchange_diversification']:
+                    price_df[col].fillna(method='ffill', inplace=True)
+                    price_df[col].fillna(0, inplace=True)
+
+                print(f"✅ Added options OI data")
+            else:
+                price_df['total_oi'] = 0
+                price_df['oi_change'] = 0
+                price_df['oi_volatility'] = 0
+                price_df['exchange_diversification'] = 0
+                print(f"⚠️  No options OI data available")
+
             # Final cleanup
             price_df = price_df.dropna(subset=['close'])  # Ensure we have price data
             print(f"📊 Loaded comprehensive market data: {len(price_df)} rows with {len(price_df.columns)} features")
-            print(f"📊 Data sources: Price, Open Interest, Liquidations, Taker Volume, Funding Rate, Account Ratios")
+            print(f"📊 Data sources: Price, OI, Liquidations, Taker Volume, Funding, Account Ratios, Orderbook, Basis, Footprint, Options OI")
 
             return price_df
 
@@ -327,15 +490,84 @@ class SignalCollector:
             else:
                 crowd_signal = 0.5
 
-            # Weighted ensemble signal
+            # NEW: Orderbook Microstructure Analysis (Tier 1 - EXTREMELY HIGH impact)
+            bid_ask_imbalance = latest_row.get('bid_ask_imbalance', 0)
+            depth_ratio = latest_row.get('depth_ratio', 1.0)
+            orderbook_spread = latest_row.get('orderbook_spread', 0.01)
+
+            # Orderbook pressure is VERY predictive for immediate price moves
+            if abs(bid_ask_imbalance) > 0.15:  # Significant imbalance
+                orderbook_signal = 0.5 + np.clip(bid_ask_imbalance * 1.5, -0.4, 0.4)
+            else:
+                orderbook_signal = 0.5
+
+            # Liquidity quality adjustment
+            if depth_ratio < 0.5 and abs(bid_ask_imbalance) > 0.1:
+                # Thin liquidity + imbalance = explosive moves possible
+                orderbook_signal = 0.5 + np.sign(bid_ask_imbalance) * 0.2
+
+            # NEW: Futures Basis Analysis (Tier 1 - EXTREMELY HIGH impact)
+            basis_momentum = latest_row.get('basis_momentum', 0)
+            close_basis = latest_row.get('close_basis', 0)
+
+            if abs(basis_momentum) > 0.0001:  # Significant basis movement
+                # Basis momentum leads spot price
+                basis_signal = 0.5 + np.clip(basis_momentum * 1000, -0.3, 0.3)
+            else:
+                basis_signal = 0.5
+
+            # Contango/backwardation regime bias
+            if close_basis > 0:  # Contango = normal bullish bias
+                basis_signal += 0.05
+            elif close_basis < 0:  # Backwardation = bearish pressure
+                basis_signal -= 0.05
+
+            basis_signal = np.clip(basis_signal, 0.0, 1.0)
+
+            # NEW: Futures Footprint Aggressiveness Analysis (Tier 2 - VERY HIGH impact)
+            volume_aggression = latest_row.get('volume_aggression', 0)
+            trade_aggression = latest_row.get('trade_aggression', 0)
+            price_impact = latest_row.get('price_impact', 0)
+
+            if abs(volume_aggression) > 0.25:  # High aggressive buying/selling
+                aggression_signal = 0.5 + np.clip(volume_aggression * 0.8, -0.3, 0.3)
+            else:
+                aggression_signal = 0.5
+
+            # Trade size confirmation
+            if abs(trade_aggression) > 0.15:  # Large institutional trades
+                aggression_signal += np.clip(trade_aggression * 0.3, -0.1, 0.1)
+
+            aggression_signal = np.clip(aggression_signal, 0.0, 1.0)
+
+            # NEW: Options OI Analysis (Tier 2 - VERY HIGH impact)
+            options_oi_ratio = latest_row.get('options_oi_ratio', 1.0)
+            oi_volatility = latest_row.get('oi_volatility', 0)
+
+            if options_oi_ratio > 1.2:  # High options OI growth
+                options_signal = 0.6  # Bullish options flow
+            elif options_oi_ratio < 0.8:  # High options OI decline
+                options_signal = 0.4  # Bearish options flow
+            else:
+                options_signal = 0.5
+
+            # Volatility adjustment
+            if oi_volatility > oi_volatility * 1.5:  # High options volatility
+                options_signal = 0.5  # Neutralize during high volatility
+
+            # ENHANCED Weighted ensemble signal with new microstructure data
             weights = {
-                'price': 0.25,      # Technical analysis
-                'volume': 0.15,     # Buy/sell pressure
-                'oi': 0.10,         # Open interest changes
-                'liquidation': 0.15, # Liquidation pressure
-                'funding': 0.10,    # Funding rate extremes
-                'smart_money': 0.15, # Top account positioning
-                'crowd': 0.10       # Global sentiment
+                'price': 0.15,          # Technical analysis (reduced weight)
+                'volume': 0.10,         # Buy/sell pressure (reduced weight)
+                'oi': 0.08,             # Open interest changes (reduced weight)
+                'liquidation': 0.10,    # Liquidation pressure (reduced weight)
+                'funding': 0.08,        # Funding rate extremes (reduced weight)
+                'smart_money': 0.10,    # Top account positioning (reduced weight)
+                'crowd': 0.06,          # Global sentiment (reduced weight)
+                'orderbook': 0.20,      # NEW: Orderbook microstructure (HIGH weight)
+                'basis': 0.18,          # NEW: Futures basis (HIGH weight)
+                'aggression': 0.15,     # NEW: Footprint aggressiveness
+                'options': 0.10         # NEW: Options OI flow
             }
 
             ensemble_score = (
@@ -345,7 +577,11 @@ class SignalCollector:
                 liq_signal * weights['liquidation'] +
                 funding_signal * weights['funding'] +
                 smart_money_signal * weights['smart_money'] +
-                crowd_signal * weights['crowd']
+                crowd_signal * weights['crowd'] +
+                orderbook_signal * weights['orderbook'] +
+                basis_signal * weights['basis'] +
+                aggression_signal * weights['aggression'] +
+                options_signal * weights['options']
             )
 
             ensemble_score = np.clip(ensemble_score, 0.0, 1.0)
@@ -368,7 +604,21 @@ class SignalCollector:
                     'liq_signal': liq_signal,
                     'funding_signal': funding_signal,
                     'smart_money_signal': smart_money_signal,
-                    'crowd_signal': crowd_signal
+                    'crowd_signal': crowd_signal,
+                    'orderbook_signal': orderbook_signal,
+                    'basis_signal': basis_signal,
+                    'aggression_signal': aggression_signal,
+                    'options_signal': options_signal
+                },
+                'microstructure_insights': {
+                    'bid_ask_imbalance': float(bid_ask_imbalance),
+                    'basis_momentum': float(basis_momentum),
+                    'volume_aggression': float(volume_aggression),
+                    'options_oi_ratio': float(options_oi_ratio),
+                    'depth_quality': 'thin' if depth_ratio < 0.5 else 'normal',
+                    'basis_regime': 'contango' if close_basis > 0 else 'backwardation' if close_basis < 0 else 'neutral',
+                    'aggressive_flow': 'buying' if volume_aggression > 0.25 else 'selling' if volume_aggression < -0.25 else 'balanced',
+                    'options_flow': 'bullish' if options_oi_ratio > 1.2 else 'bearish' if options_oi_ratio < 0.8 else 'neutral'
                 }
             }
 

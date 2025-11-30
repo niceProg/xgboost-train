@@ -88,121 +88,87 @@ class SignalPredictor:
             return pd.DataFrame()
 
     def flatten_features(self, features_df: pd.DataFrame) -> pd.DataFrame:
-        """Flatten features to match training format"""
+        """Flatten features to match training format - ENHANCED for microstructure data"""
         try:
-            # Create flattened feature dict
+            # Create flattened feature dict dynamically based on available features
             feature_dict = {}
 
-            # Technical indicators
-            technical_features = ['sma_5', 'sma_20', 'sma_50', 'ema_12', 'ema_26',
-                                 'rsi', 'macd', 'bb_upper', 'bb_lower', 'atr',
-                                 'volume_ratio', 'volatility_20']
+            # NEW: Use all available features from the enhanced feature engineering
+            # This will include our new microstructure features automatically
+            for col in features_df.columns:
+                if col not in ['id', 'symbol', 'pair', 'time_interval', 'generated_at']:
+                    # Handle different column types
+                    if col == 'signal_score':
+                        # Calculate enhanced signal score using our microstructure data
+                        feature_dict[col] = self._calculate_enhanced_signal_score(features_df)
+                    elif features_df[col].dtype in ['float64', 'int64', 'bool']:
+                        # Numeric features - take the latest value
+                        if pd.isna(features_df[col].iloc[-1]):
+                            feature_dict[col] = 0.0
+                        else:
+                            feature_dict[col] = float(features_df[col].iloc[-1])
+                    elif pd.api.types.is_datetime64_any_dtype(features_df[col]):
+                        # Datetime features - convert to components
+                        timestamp = features_df[col].iloc[-1]
+                        feature_dict[f'{col}_hour'] = timestamp.hour
+                        feature_dict[f'{col}_day'] = timestamp.day
+                        feature_dict[f'{col}_month'] = timestamp.month
 
-            for feature in technical_features:
-                if feature in features_df.columns:
-                    feature_dict[f'technical_indicators_{feature}'] = features_df[feature].iloc[0]
-                else:
-                    feature_dict[f'technical_indicators_{feature}'] = 0
+            # NEW: Enhanced microstructure signal calculation
+            if 'bid_ask_imbalance' in features_df.columns and 'basis_momentum' in features_df.columns:
+                # Use the same logic as our enhanced collect_signals.py
+                orderbook_signal = np.clip(0.5 + features_df['bid_ask_imbalance'].iloc[-1] * 1.5, 0.0, 1.0)
+                basis_signal = np.clip(0.5 + features_df['basis_momentum'].iloc[-1] * 1000, 0.0, 1.0)
 
-            # Price features
-            price_features = ['returns', 'log_returns', 'high_low_ratio', 'close_open_ratio']
+                # Weighted signal using our enhanced weights
+                enhanced_signal = (orderbook_signal * 0.35 + basis_signal * 0.30 + 0.35)  # 35% remaining weight to other features
+                feature_dict['enhanced_microstructure_score'] = enhanced_signal
 
-            for feature in price_features:
-                if feature in features_df.columns:
-                    feature_dict[f'price_features_{feature}'] = features_df[feature].iloc[0]
-                else:
-                    feature_dict[f'price_features_{feature}'] = 0
-
-            # Time features (use current timestamp)
-            current_time = features_df.index[0]
-            time_features = ['hour', 'day_of_week', 'month']
-
-            for feature in time_features:
-                if feature == 'hour':
-                    value = current_time.hour
-                elif feature == 'day_of_week':
-                    value = current_time.weekday()
-                elif feature == 'month':
-                    value = current_time.month
-                else:
-                    value = 0
-
-                feature_dict[f'time_features_{feature}'] = value
-
-            # Create flattened feature dict with all expected features
-            feature_dict = {}
-
-            # Add signal_score first (model expects this as first feature)
-            if 'signal_score' in self.feature_cols:
-                # Calculate a simple signal score based on current price action
-                current_price = features_df['close'].iloc[0]
-                prev_price = features_df['close'].iloc[-2] if len(features_df) > 1 else current_price
-                price_change = (current_price - prev_price) / prev_price
-                # Simple signal score: 0.5 for neutral, adjusted by price change
-                signal_score = np.clip(0.5 + price_change * 5, 0.0, 1.0)  # Scale price change to 0-1 range
-                feature_dict['signal_score'] = signal_score
-
-            # Technical indicators
-            technical_features = ['sma_5', 'sma_20', 'sma_50', 'ema_12', 'ema_26',
-                                 'rsi', 'macd', 'bb_upper', 'bb_lower', 'atr',
-                                 'volume_ratio', 'volatility_20']
-
-            for feature in technical_features:
-                feature_name = f'technical_indicators_{feature}'
-                if feature in features_df.columns:
-                    feature_dict[feature_name] = features_df[feature].iloc[0]
-                elif feature_name in self.feature_cols:
-                    feature_dict[feature_name] = 0
-
-            # Price features
-            price_features = ['returns', 'log_returns', 'high_low_ratio', 'close_open_ratio']
-
-            for feature in price_features:
-                feature_name = f'price_features_{feature}'
-                if feature in features_df.columns:
-                    feature_dict[feature_name] = features_df[feature].iloc[0]
-                elif feature_name in self.feature_cols:
-                    feature_dict[feature_name] = 0
-
-            # Time features (use current timestamp)
-            current_time = features_df.index[0]
-            time_features = ['hour', 'day_of_week', 'month']
-
-            for feature in time_features:
-                feature_name = f'time_features_{feature}'
-                if feature == 'hour':
-                    value = current_time.hour
-                elif feature == 'day_of_week':
-                    value = current_time.weekday()
-                elif feature == 'month':
-                    value = current_time.month
-                else:
-                    value = 0
-
-                feature_dict[feature_name] = value
-
-            # Convert to DataFrame with exact feature order
+            # Create DataFrame with flattened features
             flattened_df = pd.DataFrame([feature_dict])
 
-            # Ensure all expected columns exist and are in correct order
-            for col in self.feature_cols:
-                if col not in flattened_df.columns:
-                    flattened_df[col] = 0
+            # Ensure we have all expected features from training
+            if self.feature_cols:
+                missing_features = set(self.feature_cols) - set(flattened_df.columns)
+                for feature in missing_features:
+                    flattened_df[feature] = 0.0
 
-            # Use the actual XGBoost model feature names, not the stored feature_cols
-            if hasattr(self.model, 'feature_names_in_'):
-                actual_feature_names = list(self.model.feature_names_in_)
-            else:
-                actual_feature_names = self.feature_cols
+                # Reorder columns to match training order
+                flattened_df = flattened_df[self.feature_cols]
 
-            # Select only the columns used during training in the correct order
-            flattened_df = flattened_df[actual_feature_names]
+            print(f"✅ Flattened {len(flattened_df.columns)} features for prediction")
+            print(f"🔬 Microstructure features included: {sum(1 for col in flattened_df.columns if any(keyword in str(col).lower() for keyword in ['imbalance', 'basis', 'aggression', 'options', 'depth', 'spread']))}")
 
             return flattened_df
 
         except Exception as e:
             print(f"❌ Error flattening features: {e}")
+            import traceback
+            traceback.print_exc()
             return pd.DataFrame()
+
+    def _calculate_enhanced_signal_score(self, features_df: pd.DataFrame) -> float:
+        """Calculate enhanced signal score using microstructure data"""
+        try:
+            # Basic price momentum
+            current_price = features_df['close'].iloc[-1]
+            prev_price = features_df['close'].iloc[-2] if len(features_df) > 1 else current_price
+            price_momentum = (current_price - prev_price) / prev_price
+            base_signal = np.clip(0.5 + price_momentum * 5, 0.0, 1.0)
+
+            # Enhanced with microstructure if available
+            if 'bid_ask_imbalance' in features_df.columns:
+                imbalance_boost = np.clip(features_df['bid_ask_imbalance'].iloc[-1] * 0.2, -0.1, 0.1)
+                base_signal += imbalance_boost
+
+            if 'basis_momentum' in features_df.columns:
+                basis_boost = np.clip(features_df['basis_momentum'].iloc[-1] * 100, -0.1, 0.1)
+                base_signal += basis_boost
+
+            return np.clip(base_signal, 0.0, 1.0)
+
+        except Exception as e:
+            return 0.5  # Default neutral signal
 
     def predict_signal(self, symbol: str, pair: str, interval: str, threshold: float = 0.6):
         """Generate trading signal prediction"""
