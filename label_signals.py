@@ -19,29 +19,43 @@ class SignalLabeler:
         self.db_config = get_database_config()
         self.db_manager = DatabaseManager(self.db_config)
 
-    def get_pending_signals(self, limit: int = None) -> List[Dict]:
+    def get_pending_signals(self, limit: int = None, symbol: str = None, pair: str = None, interval: str = None) -> List[Dict]:
         """Get pending signals that need labeling"""
         try:
+            # Build base query
             query = """
                 SELECT id, symbol, pair, time_interval, generated_at, horizon_minutes, price_now
                 FROM cg_train_dataset
                 WHERE label_status = 'pending'
                   AND generated_at <= %s
-                ORDER BY generated_at
             """
 
             # Only label signals where horizon has passed
             cutoff_time = datetime.now() - timedelta(minutes=1)  # 1 minute buffer
-            params = (cutoff_time,)
+            params = [cutoff_time]
+
+            # Add filters if provided
+            if symbol:
+                query += " AND symbol = %s"
+                params.append(symbol)
+            if pair:
+                query += " AND pair = %s"
+                params.append(pair)
+            if interval:
+                query += " AND time_interval = %s"
+                params.append(interval)
+
+            query += " ORDER BY generated_at"
 
             if limit:
                 query += " LIMIT %s"
-                params = (cutoff_time, limit)
+                params.append(limit)
 
-            df = self.db_manager.execute_query(query, params)
+            df = self.db_manager.execute_query(query, tuple(params))
             signals = df.to_dict('records')
 
-            print(f"📊 Found {len(signals)} pending signals to label")
+            filter_desc = f" for {symbol} {pair} {interval}" if symbol or pair or interval else ""
+            print(f"📊 Found {len(signals)} pending signals to label{filter_desc}")
             return signals
 
         except Exception as e:
@@ -155,13 +169,14 @@ class SignalLabeler:
         except Exception as e:
             print(f"❌ Error updating signal label: {e}")
 
-    def label_signals(self, limit: int = None, threshold_pct: float = 0.5):
+    def label_signals(self, limit: int = None, threshold_pct: float = 0.5, symbol: str = None, pair: str = None, interval: str = None):
         """Main labeling function"""
-        print(f"🏷️  Starting signal labeling")
+        filter_info = f" for {symbol} {pair} {interval}" if symbol or pair or interval else ""
+        print(f"🏷️  Starting signal labeling{filter_info}")
         print(f"📊 Limit: {limit or 'all pending signals'}")
         print(f"📈 Threshold: ±{threshold_pct}%")
 
-        pending_signals = self.get_pending_signals(limit)
+        pending_signals = self.get_pending_signals(limit, symbol, pair, interval)
 
         if not pending_signals:
             print("✅ No pending signals to label")
@@ -255,6 +270,9 @@ class SignalLabeler:
 
 def main():
     parser = argparse.ArgumentParser(description='Label pending signals')
+    parser.add_argument('--symbol', help='Symbol filter (e.g., BTC)')
+    parser.add_argument('--pair', help='Pair filter (e.g., BTCUSDT)')
+    parser.add_argument('--interval', help='Interval filter (e.g., 1h)')
     parser.add_argument('--limit', type=int, help='Limit number of signals to label')
     parser.add_argument('--threshold', type=float, default=0.5,
                        help='Price change threshold in percentage (default: 0.5%)')
@@ -269,7 +287,13 @@ def main():
         if args.stats:
             labeler.get_label_statistics()
         else:
-            labeler.label_signals(limit=args.limit, threshold_pct=args.threshold)
+            labeler.label_signals(
+                limit=args.limit,
+                threshold_pct=args.threshold,
+                symbol=args.symbol,
+                pair=args.pair,
+                interval=args.interval
+            )
             labeler.get_label_statistics()
 
     except KeyboardInterrupt:

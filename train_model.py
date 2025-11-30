@@ -15,6 +15,7 @@ import json
 from datetime import datetime
 import joblib
 from typing import Dict
+import os
 
 from env_config import get_database_config
 from database import DatabaseManager
@@ -25,9 +26,12 @@ except ImportError:
     PerformanceEvaluator = None
 
 class ModelTrainer:
-    def __init__(self):
+    def __init__(self, output_dir="output_train"):
         self.db_config = get_database_config()
         self.db_manager = DatabaseManager(self.db_config)
+        self.output_dir = output_dir
+        # Ensure output directory exists
+        os.makedirs(self.output_dir, exist_ok=True)
 
     def load_labeled_signals(self, symbol: str = None, pair: str = None,
                              min_date: str = None, limit: int = None) -> pd.DataFrame:
@@ -284,9 +288,13 @@ class ModelTrainer:
         }
 
     def save_model(self, model, feature_cols, model_name: str = None):
-        """Save trained model"""
+        """Save trained model to output folder"""
         if model_name is None:
             model_name = f"xgboost_trading_model_{datetime.now().strftime('%Y%m%d_%H%M%S')}.joblib"
+
+        # Add output directory prefix if not already present
+        if not model_name.startswith(self.output_dir + "/") and not os.path.dirname(model_name):
+            model_name = os.path.join(self.output_dir, model_name)
 
         model_data = {
             'model': model,
@@ -296,7 +304,91 @@ class ModelTrainer:
         }
 
         joblib.dump(model_data, model_name)
-        print(f"💾 Model saved as {model_name}")
+        print(f"💾 Model saved to {model_name}")
+
+        # Also save a copy with a generic name for easy access
+        latest_model = os.path.join(self.output_dir, "latest_model.joblib")
+        joblib.dump(model_data, latest_model)
+        print(f"💾 Latest model saved to {latest_model}")
+
+    def load_model(self, model_path: str):
+        """Load trained model"""
+        try:
+            # If just "latest" is specified, load from output folder
+            if model_path == "latest":
+                model_path = os.path.join(self.output_dir, "latest_model.joblib")
+            # If model_path doesn't include output directory, check there first
+            elif not model_path.startswith(self.output_dir + "/") and not model_path.startswith("./" + self.output_dir + "/") and not os.path.dirname(model_path):
+                potential_path = os.path.join(self.output_dir, model_path)
+                if os.path.exists(potential_path):
+                    model_path = potential_path
+                else:
+                    # Also try with .joblib extension
+                    if not model_path.endswith('.joblib'):
+                        potential_path = os.path.join(self.output_dir, model_path + '.joblib')
+                        if os.path.exists(potential_path):
+                            model_path = potential_path
+
+            model_data = joblib.load(model_path)
+
+            # Handle different model formats
+            if isinstance(model_data, dict) and 'model' in model_data:
+                # New format with metadata
+                model = model_data['model']
+                feature_cols = model_data.get('feature_cols', [])
+                print(f"✅ Model loaded from {model_path}")
+                print(f"📊 Features: {len(feature_cols)}")
+                if 'training_date' in model_data:
+                    print(f"📅 Training Date: {model_data['training_date']}")
+                if 'model_version' in model_data:
+                    print(f"🔢 Version: {model_data['model_version']}")
+                return model
+            else:
+                # Direct model format
+                print(f"✅ Model loaded from {model_path}")
+                return model_data
+
+        except Exception as e:
+            print(f"❌ Error loading model: {e}")
+            return None
+
+    def list_available_models(self):
+        """List all available trained models in output folder"""
+        if not os.path.exists(self.output_dir):
+            print(f"❌ Output directory '{self.output_dir}' does not exist")
+            return []
+
+        models = []
+        for file in os.listdir(self.output_dir):
+            if file.endswith('.joblib'):
+                model_path = os.path.join(self.output_dir, file)
+                try:
+                    # Get file modification time
+                    mtime = os.path.getmtime(model_path)
+                    mod_time = datetime.fromtimestamp(mtime)
+                    models.append({
+                        'file': file,
+                        'path': model_path,
+                        'modified': mod_time,
+                        'size': os.path.getsize(model_path)
+                    })
+                except:
+                    continue
+
+        # Sort by modification time (newest first)
+        models.sort(key=lambda x: x['modified'], reverse=True)
+
+        if models:
+            print(f"📁 Available models in {self.output_dir}:")
+            for i, model in enumerate(models, 1):
+                status = "🔥 LATEST" if model['file'] == 'latest_model.joblib' else f"  {i}."
+                print(f"   {status} {model['file']}")
+                print(f"       Modified: {model['modified'].strftime('%Y-%m-%d %H:%M:%S')}")
+                print(f"       Size: {model['size']:,} bytes")
+        else:
+            print(f"❌ No models found in {self.output_dir}")
+
+        return models
 
     def train_pipeline(self, symbol: str = None, pair: str = None, min_date: str = None,
                       limit: int = None, save_model: bool = True):
@@ -354,11 +446,19 @@ def main():
     parser.add_argument('--min-date', help='Minimum date (YYYY-MM-DD format)')
     parser.add_argument('--limit', type=int, help='Limit number of signals to use')
     parser.add_argument('--no-save', action='store_true', help='Don\'t save the model')
+    parser.add_argument('--list-models', action='store_true', help='List all available models in output_train folder')
+    parser.add_argument('--output-dir', default='output_train', help='Output directory for models (default: output_train)')
 
     args = parser.parse_args()
 
     try:
-        trainer = ModelTrainer()
+        trainer = ModelTrainer(output_dir=args.output_dir)
+
+        # If listing models, just list them and exit
+        if args.list_models:
+            trainer.list_available_models()
+            return
+
         trainer.train_pipeline(
             symbol=args.symbol,
             pair=args.pair,

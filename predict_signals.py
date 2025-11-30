@@ -10,6 +10,7 @@ import pandas as pd
 import numpy as np
 import joblib
 import json
+import os
 from datetime import datetime, timedelta
 from typing import Dict, Any
 
@@ -29,11 +30,29 @@ class SignalPredictor:
     def _load_model(self):
         """Load trained model"""
         try:
-            model_data = joblib.load(self.model_path)
+            # Handle model path resolution with output_train folder
+            model_path = self.model_path
+
+            # If "latest" is specified, use latest model from output_train
+            if model_path == "latest":
+                model_path = os.path.join("output_train", "latest_model.joblib")
+            # If path doesn't exist and doesn't include output_train, check output_train
+            elif not os.path.exists(model_path) and not model_path.startswith("output_train/") and not model_path.startswith("./output_train/"):
+                potential_path = os.path.join("output_train", model_path)
+                if os.path.exists(potential_path):
+                    model_path = potential_path
+                else:
+                    # Try with .joblib extension
+                    if not model_path.endswith('.joblib'):
+                        potential_path = os.path.join("output_train", model_path + '.joblib')
+                        if os.path.exists(potential_path):
+                            model_path = potential_path
+
+            model_data = joblib.load(model_path)
             self.model = model_data['model']
             self.feature_cols = model_data['feature_cols']
             self.training_date = model_data.get('training_date', 'Unknown')
-            print(f"✅ Model loaded from {self.model_path}")
+            print(f"✅ Model loaded from {model_path}")
             print(f"📅 Trained on: {self.training_date}")
             print(f"🔧 Features: {len(self.feature_cols)}")
         except Exception as e:
@@ -90,54 +109,46 @@ class SignalPredictor:
     def flatten_features(self, features_df: pd.DataFrame) -> pd.DataFrame:
         """Flatten features to match training format - ENHANCED for microstructure data"""
         try:
-            # Create flattened feature dict dynamically based on available features
+            # Use the actual model feature names if available
+            if hasattr(self.model, 'feature_names_in_'):
+                expected_features = list(self.model.feature_names_in_)
+                print(f"🎯 Using model's {len(expected_features)} trained features")
+            else:
+                expected_features = self.feature_cols or []
+                print(f"🎯 Using {len(expected_features)} stored feature names")
+
+            # Create flattened feature dict with EXACT feature names from training
             feature_dict = {}
 
-            # NEW: Use all available features from the enhanced feature engineering
-            # This will include our new microstructure features automatically
-            for col in features_df.columns:
-                if col not in ['id', 'symbol', 'pair', 'time_interval', 'generated_at']:
-                    # Handle different column types
-                    if col == 'signal_score':
-                        # Calculate enhanced signal score using our microstructure data
-                        feature_dict[col] = self._calculate_enhanced_signal_score(features_df)
-                    elif features_df[col].dtype in ['float64', 'int64', 'bool']:
-                        # Numeric features - take the latest value
-                        if pd.isna(features_df[col].iloc[-1]):
-                            feature_dict[col] = 0.0
-                        else:
-                            feature_dict[col] = float(features_df[col].iloc[-1])
-                    elif pd.api.types.is_datetime64_any_dtype(features_df[col]):
-                        # Datetime features - convert to components
-                        timestamp = features_df[col].iloc[-1]
-                        feature_dict[f'{col}_hour'] = timestamp.hour
-                        feature_dict[f'{col}_day'] = timestamp.day
-                        feature_dict[f'{col}_month'] = timestamp.month
+            for feature_name in expected_features:
+                if feature_name in features_df.columns:
+                    # Feature exists directly in our enhanced data
+                    if pd.isna(features_df[feature_name].iloc[-1]):
+                        feature_dict[feature_name] = 0.0
+                    else:
+                        feature_dict[feature_name] = float(features_df[feature_name].iloc[-1])
+                else:
+                    # Feature might be calculated or missing - try to calculate it
+                    calculated_value = self._calculate_missing_feature(feature_name, features_df)
+                    feature_dict[feature_name] = calculated_value
 
-            # NEW: Enhanced microstructure signal calculation
-            if 'bid_ask_imbalance' in features_df.columns and 'basis_momentum' in features_df.columns:
-                # Use the same logic as our enhanced collect_signals.py
-                orderbook_signal = np.clip(0.5 + features_df['bid_ask_imbalance'].iloc[-1] * 1.5, 0.0, 1.0)
-                basis_signal = np.clip(0.5 + features_df['basis_momentum'].iloc[-1] * 1000, 0.0, 1.0)
-
-                # Weighted signal using our enhanced weights
-                enhanced_signal = (orderbook_signal * 0.35 + basis_signal * 0.30 + 0.35)  # 35% remaining weight to other features
-                feature_dict['enhanced_microstructure_score'] = enhanced_signal
-
-            # Create DataFrame with flattened features
+            # Create DataFrame with exact training feature order
             flattened_df = pd.DataFrame([feature_dict])
 
-            # Ensure we have all expected features from training
-            if self.feature_cols:
-                missing_features = set(self.feature_cols) - set(flattened_df.columns)
-                for feature in missing_features:
+            # Ensure we have all expected features (fill missing with 0.0)
+            for feature in expected_features:
+                if feature not in flattened_df.columns:
                     flattened_df[feature] = 0.0
 
-                # Reorder columns to match training order
-                flattened_df = flattened_df[self.feature_cols]
+            # Reorder to exactly match training order
+            flattened_df = flattened_df[expected_features]
+
+            microstructure_count = sum(1 for col in flattened_df.columns
+                                    if any(keyword in str(col).lower()
+                                        for keyword in ['imbalance', 'basis', 'aggression', 'options', 'depth', 'spread', 'orderbook', 'footprint']))
 
             print(f"✅ Flattened {len(flattened_df.columns)} features for prediction")
-            print(f"🔬 Microstructure features included: {sum(1 for col in flattened_df.columns if any(keyword in str(col).lower() for keyword in ['imbalance', 'basis', 'aggression', 'options', 'depth', 'spread']))}")
+            print(f"🔬 Microstructure features included: {microstructure_count}")
 
             return flattened_df
 
@@ -169,6 +180,71 @@ class SignalPredictor:
 
         except Exception as e:
             return 0.5  # Default neutral signal
+
+    def _calculate_missing_feature(self, feature_name: str, features_df: pd.DataFrame) -> float:
+        """Calculate missing feature based on available data"""
+        try:
+            # Handle common missing features
+            if feature_name == 'signal_score':
+                return self._calculate_enhanced_signal_score(features_df)
+            elif 'sma_' in feature_name and 'sma_' not in features_df.columns:
+                # Calculate simple moving average
+                base_feature = feature_name.replace('sma_', '')
+                if base_feature in features_df.columns:
+                    return float(features_df[base_feature].iloc[-1])
+            elif 'ema_' in feature_name and 'ema_' not in features_df.columns:
+                # Calculate simple EMA approximation
+                base_feature = feature_name.replace('ema_', '')
+                if base_feature in features_df.columns:
+                    return float(features_df[base_feature].iloc[-1])
+            elif 'bb_' in feature_name and 'bb_' not in features_df.columns:
+                # Calculate Bollinger Bands approximation
+                if 'close' in features_df.columns:
+                    return float(features_df['close'].iloc[-1])
+            elif feature_name == 'rsi' and 'rsi' not in features_df.columns:
+                # Simple RSI approximation
+                return 0.5  # Neutral
+            elif feature_name == 'macd' and 'macd' not in features_df.columns:
+                # Simple MACD approximation
+                return 0.0  # Neutral
+            elif feature_name == 'atr' and 'atr' not in features_df.columns:
+                # Simple ATR approximation
+                if 'high' in features_df.columns and 'low' in features_df.columns:
+                    return float((features_df['high'].iloc[-1] - features_df['low'].iloc[-1]) / features_df['close'].iloc[-1] * 100)
+            elif 'volume_ratio' in feature_name and 'volume_ratio' not in features_df.columns:
+                # Volume ratio approximation
+                if 'volume' in features_df.columns:
+                    return 1.0  # Normal volume
+            elif 'volatility' in feature_name and 'volatility' not in features_df.columns:
+                # Volatility approximation
+                if 'close' in features_df.columns:
+                    return 0.01  # 1% volatility
+            elif 'returns' in feature_name and 'returns' not in features_df.columns:
+                # Returns approximation
+                if 'close' in features_df.columns and len(features_df) > 1:
+                    return float((features_df['close'].iloc[-1] - features_df['close'].iloc[-2]) / features_df['close'].iloc[-2])
+            elif feature_name in ['high_low_ratio', 'close_open_ratio']:
+                # Price ratio approximations
+                if 'high' in features_df.columns and 'low' in features_df.columns:
+                    if feature_name == 'high_low_ratio':
+                        return float(features_df['high'].iloc[-1] / features_df['low'].iloc[-1])
+                    elif 'close_open_ratio' and 'open' in features_df.columns:
+                        return float(features_df['close'].iloc[-1] / features_df['open'].iloc[-1])
+            elif feature_name.startswith('time_features_'):
+                # Time features
+                timestamp = features_df.index[-1] if hasattr(features_df.index[-1], 'hour') else pd.Timestamp.now()
+                if 'hour' in feature_name:
+                    return float(timestamp.hour)
+                elif 'day_of_week' in feature_name:
+                    return float(timestamp.weekday())
+                elif 'month' in feature_name:
+                    return float(timestamp.month)
+
+            # Default for unknown features
+            return 0.0
+
+        except Exception as e:
+            return 0.0  # Safe default
 
     def predict_signal(self, symbol: str, pair: str, interval: str, threshold: float = 0.6):
         """Generate trading signal prediction"""
