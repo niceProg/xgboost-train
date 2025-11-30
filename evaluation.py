@@ -128,10 +128,15 @@ class PerformanceEvaluator:
 
     def _empty_metrics(self) -> Dict[str, Any]:
         """Return empty metrics structure"""
+        now = datetime.now()
         return {
             'total_return': 0.0, 'annualized_return': 0.0, 'sharpe_ratio': 0.0,
             'sortino_ratio': 0.0, 'max_drawdown': 0.0, 'win_rate': 0.0,
-            'profit_factor': 0.0, 'trade_count': 0, 'overall_grade': 'F'
+            'profit_factor': 0.0, 'trade_count': 0, 'overall_grade': 'F',
+            'period_start': now.strftime('%Y-%m-%d'),
+            'period_end': now.strftime('%Y-%m-%d'),
+            'total_trading_days': 0,
+            'evaluation_date': now.isoformat()
         }
 
     def _calculate_total_return(self, equity_curve: pd.DataFrame) -> float:

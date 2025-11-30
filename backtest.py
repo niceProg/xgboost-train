@@ -108,6 +108,28 @@ class BacktestEngine:
 
             # Calculate performance metrics
             equity_curve_df = pd.DataFrame(self.equity_curve)
+
+            # Handle empty equity curve case
+            if equity_curve_df.empty and not self.trades:
+                # Create a minimal equity curve for empty backtest
+                equity_curve_df = pd.DataFrame([
+                    {
+                        'timestamp': pd.to_datetime(start_date),
+                        'equity_value': self.initial_capital,
+                        'price': 0,  # No price data available
+                        'position': 0,
+                        'cash': self.initial_capital
+                    },
+                    {
+                        'timestamp': pd.to_datetime(end_date),
+                        'equity_value': self.initial_capital,
+                        'price': 0,  # No price data available
+                        'position': 0,
+                        'cash': self.initial_capital
+                    }
+                ])
+                equity_curve_df.set_index('timestamp', inplace=True)
+
             metrics = self.evaluator.calculate_trading_metrics(self.trades, equity_curve_df)
 
             # Add backtest-specific metrics
@@ -480,13 +502,14 @@ class BacktestEngine:
                 equity_curve_json = '[]'
 
             # Create monthly returns JSON
-            monthly_returns_json = json.dumps({
-                f"{month.year}-{month.month:02d}": {
+            monthly_returns_data = {}
+            current_year = datetime.now().year
+            for month in range(1, 13):  # Placeholder for actual monthly data
+                monthly_returns_data[f"{current_year}-{month:02d}"] = {
                     'return': metrics.get('monthly_return', 0),
                     'volatility': metrics.get('volatility', 0)
                 }
-                for month in range(1, 13)  # Placeholder for actual monthly data
-            }, default=str)
+            monthly_returns_json = json.dumps(monthly_returns_data, default=str)
 
             # Insert into database
             insert_query = """
