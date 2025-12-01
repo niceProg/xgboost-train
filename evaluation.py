@@ -104,7 +104,7 @@ class PerformanceEvaluator:
             }
 
             # Check target achievements from build.md
-            metrics.get('cagr_target_achieved', False) = metrics['annualized_return'] >= 0.50  # 50% target
+            metrics['cagr_target_achieved'] = metrics['annualized_return'] >= 0.50  # 50% target
             metrics['max_drawdown_target_achieved'] = metrics['max_drawdown'] <= 0.25  # 25% max
             metrics['sharpe_target_achieved'] = 1.2 <= metrics.get('sharpe_ratio', 0) <= 1.6
             metrics['sortino_target_achieved'] = 2.0 <= metrics.get('sortino_ratio', 0) <= 3.0
