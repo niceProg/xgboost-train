@@ -341,10 +341,10 @@ class Pure9TableStrategyBacktester:
 
                 # Basis Signal: Trade basis convergence
                 df['basis_signal'] = np.where(
-                    (df['basis_rate'] > df['basis_ma'] + 2 * df['basis_volatility'),  # High basis
+                    (df['basis_rate'] > df['basis_ma'] + 2 * df['basis_volatility']),  # High basis
                     1,  # BUY spot (convergence play)
                     np.where(
-                        (df['basis_rate'] < df['basis_ma'] - 2 * df['basis_volatility'),  # Low basis
+                        (df['basis_rate'] < df['basis_ma'] - 2 * df['basis_volatility']),  # Low basis
                         0,  # SELL spot
                         2   # HOLD
                     )
