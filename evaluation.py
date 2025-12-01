@@ -104,10 +104,10 @@ class PerformanceEvaluator:
             }
 
             # Check target achievements from build.md
-            metrics['cagr_target_achieved'] = metrics['annualized_return'] >= 0.50  # 50% target
+            metrics.get('cagr_target_achieved', False) = metrics['annualized_return'] >= 0.50  # 50% target
             metrics['max_drawdown_target_achieved'] = metrics['max_drawdown'] <= 0.25  # 25% max
-            metrics['sharpe_target_achieved'] = 1.2 <= metrics['sharpe_ratio'] <= 1.6
-            metrics['sortino_target_achieved'] = 2.0 <= metrics['sortino_ratio'] <= 3.0
+            metrics['sharpe_target_achieved'] = 1.2 <= metrics.get('sharpe_ratio', 0) <= 1.6
+            metrics['sortino_target_achieved'] = 2.0 <= metrics.get('sortino_ratio', 0) <= 3.0
             metrics['win_rate_target_achieved'] = metrics['win_rate'] >= 0.70  # 70% target
 
             # Calculate overall grade
@@ -136,7 +136,12 @@ class PerformanceEvaluator:
             'period_start': now.strftime('%Y-%m-%d'),
             'period_end': now.strftime('%Y-%m-%d'),
             'total_trading_days': 0,
-            'evaluation_date': now.isoformat()
+            'evaluation_date': now.isoformat(),
+            'monthly_return': 0.0, 'volatility': 0.0, 'max_drawdown_duration': 0,
+            'var_95': 0.0, 'cvar_95': 0.0, 'calmar_ratio': 0.0, 'information_ratio': 0.0,
+            'cagr_target_achieved': False, 'max_drawdown_target_achieved': True,
+            'sharpe_target_achieved': False, 'sortino_target_achieved': False,
+            'win_rate_target_achieved': False
         }
 
     def _calculate_total_return(self, equity_curve: pd.DataFrame) -> float:
@@ -440,11 +445,11 @@ class PerformanceEvaluator:
             score += 10
 
         # Sharpe Ratio (25% weight)
-        if 1.2 <= metrics['sharpe_ratio'] <= 1.6:
+        if 1.2 <= metrics.get('sharpe_ratio', 0) <= 1.6:
             score += 25
-        elif metrics['sharpe_ratio'] >= 1.0:
+        elif metrics.get('sharpe_ratio', 0) >= 1.0:
             score += 20
-        elif metrics['sharpe_ratio'] >= 0.5:
+        elif metrics.get('sharpe_ratio', 0) >= 0.5:
             score += 10
 
         # Max Drawdown (20% weight)
@@ -464,11 +469,11 @@ class PerformanceEvaluator:
             score += 5
 
         # Sortino Ratio (10% weight)
-        if 2.0 <= metrics['sortino_ratio'] <= 3.0:
+        if 2.0 <= metrics.get('sortino_ratio', 0) <= 3.0:
             score += 10
-        elif metrics['sortino_ratio'] >= 1.5:
+        elif metrics.get('sortino_ratio', 0) >= 1.5:
             score += 7
-        elif metrics['sortino_ratio'] >= 1.0:
+        elif metrics.get('sortino_ratio', 0) >= 1.0:
             score += 3
 
         # Grade mapping
@@ -514,29 +519,29 @@ class PerformanceEvaluator:
         print(f"\n💰 RETURN METRICS:")
         print(f"   Total Return: {metrics['total_return']:.2%}")
         print(f"   Annualized Return (CAGR): {metrics['annualized_return']:.2%}")
-        print(f"   Monthly Average Return: {metrics['monthly_return']:.2%}")
+        print(f"   Monthly Average Return: {metrics.get('monthly_return', 0):.2%}")
 
         # Risk Metrics
         print(f"\n⚠️  RISK METRICS:")
-        print(f"   Volatility (Annual): {metrics['volatility']:.2%}")
-        print(f"   Maximum Drawdown: {metrics['max_drawdown']:.2%}")
-        print(f"   Max DD Duration: {metrics['max_drawdown_duration']} days")
-        print(f"   VaR (95%): {metrics['var_95']:.2%}")
-        print(f"   CVaR (95%): {metrics['cvar_95']:.2%}")
+        print(f"   Volatility (Annual): {metrics.get('volatility', 0):.2%}")
+        print(f"   Maximum Drawdown: {metrics.get('max_drawdown', 0):.2%}")
+        print(f"   Max DD Duration: {metrics.get('max_drawdown_duration', 0)} days")
+        print(f"   VaR (95%): {metrics.get('var_95', 0):.2%}")
+        print(f"   CVaR (95%): {metrics.get('cvar_95', 0):.2%}")
 
         # Risk-Adjusted Metrics
         print(f"\n📈 RISK-ADJUSTED METRICS:")
-        print(f"   Sharpe Ratio: {metrics['sharpe_ratio']:.2f}")
-        print(f"   Sortino Ratio: {metrics['sortino_ratio']:.2f}")
-        print(f"   Calmar Ratio: {metrics['calmar_ratio']:.2f}")
-        print(f"   Information Ratio: {metrics['information_ratio']:.2f}")
+        print(f"   Sharpe Ratio: {metrics.get('sharpe_ratio', 0):.2f}")
+        print(f"   Sortino Ratio: {metrics.get('sortino_ratio', 0):.2f}")
+        print(f"   Calmar Ratio: {metrics.get('calmar_ratio', 0):.2f}")
+        print(f"   Information Ratio: {metrics.get('information_ratio', 0):.2f}")
 
         # Build.md Target Achievement
         print(f"\n🎯 BUILD.MD TARGETS:")
-        print(f"   CAGR ≥ 50%: {'✅ ACHIEVED' if metrics['cagr_target_achieved'] else '❌ NOT ACHIEVED'} ({metrics['annualized_return']:.2%})")
+        print(f"   CAGR ≥ 50%: {'✅ ACHIEVED' if metrics.get('cagr_target_achieved', False) else '❌ NOT ACHIEVED'} ({metrics['annualized_return']:.2%})")
         print(f"   Max Drawdown ≤ 25%: {'✅ ACHIEVED' if metrics['max_drawdown_target_achieved'] else '❌ NOT ACHIEVED'} ({metrics['max_drawdown']:.2%})")
-        print(f"   Sharpe 1.2-1.6: {'✅ ACHIEVED' if metrics['sharpe_target_achieved'] else '❌ NOT ACHIEVED'} ({metrics['sharpe_ratio']:.2f})")
-        print(f"   Sortino 2.0-3.0: {'✅ ACHIEVED' if metrics['sortino_target_achieved'] else '❌ NOT ACHIEVED'} ({metrics['sortino_ratio']:.2f})")
+        print(f"   Sharpe 1.2-1.6: {'✅ ACHIEVED' if metrics['sharpe_target_achieved'] else '❌ NOT ACHIEVED'} ({metrics.get('sharpe_ratio', 0):.2f})")
+        print(f"   Sortino 2.0-3.0: {'✅ ACHIEVED' if metrics['sortino_target_achieved'] else '❌ NOT ACHIEVED'} ({metrics.get('sortino_ratio', 0):.2f})")
         print(f"   Win Rate ≥ 70%: {'✅ ACHIEVED' if metrics['win_rate_target_achieved'] else '❌ NOT ACHIEVED'} ({metrics['win_rate']:.2%})")
 
         # Trade Metrics

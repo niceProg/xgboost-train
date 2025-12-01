@@ -536,7 +536,7 @@ class BacktestEngine:
                 backtest_id, 'enhanced_xgboost_project',
                 f'Enhanced XGBoost {symbol} {interval}',
                 'enhanced_microstructure_trading',
-                f'Backtest with {self.backtest_config["max_position_size"]*100:.0f}% position, {self.backtest_config["commission"]*100:.2f}% commission, {self.backtest_config["slippage"]*100:.2f}% slippage',
+                f'Backtest with {metrics.get("backtest_config", {}).get("max_position_size", 0.95)*100:.0f}% position, {metrics.get("backtest_config", {}).get("commission", 0.001)*100:.2f}% commission, {metrics.get("backtest_config", {}).get("slippage", 0.0005)*100:.2f}% slippage',
                 start_date or '2024-01-01',
                 end_date or '2024-03-31',
                 metrics.get('total_trading_days', 0),
