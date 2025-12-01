@@ -91,19 +91,23 @@ class ComprehensiveBacktester:
         print(f"📊 Fetching comprehensive data for {start_date} to {end_date}")
 
         try:
+            # Convert date strings to Unix timestamp in milliseconds
+            start_timestamp = int(datetime.strptime(start_date, '%Y-%m-%d').timestamp() * 1000)
+            end_timestamp = int(datetime.strptime(end_date, '%Y-%m-%d').timestamp() * 1000)
+
             # 1. Primary price data (base table)
             price_query = """
             SELECT
-                timestamp,
-                open, high, low, close, volume
+                time,
+                open, high, low, close, volume_usd as volume
             FROM cg_spot_price_history
             WHERE symbol = %s
-            AND timestamp >= %s
-            AND timestamp <= %s
-            ORDER BY timestamp
+            AND time >= %s
+            AND time <= %s
+            ORDER BY time
             """
 
-            base_data = self.db_manager.execute_query(price_query, (symbol, start_date, end_date))
+            base_data = self.db_manager.execute_query(price_query, (symbol, start_timestamp, end_timestamp))
 
             if base_data.empty:
                 print(f"❌ No price data found for {symbol} in specified period")
@@ -114,65 +118,77 @@ class ComprehensiveBacktester:
             # 2-9. Join with additional tables
             # Open Interest data
             oi_query = """
-            SELECT timestamp, open_interest, oi_change_pct
+            SELECT time, close as open_interest
             FROM cg_open_interest_aggregated_history
-            WHERE symbol = %s AND timestamp >= %s AND timestamp <= %s
+            WHERE symbol = %s AND time >= %s AND time <= %s
             """
 
             # Liquidation data
             liquidation_query = """
-            SELECT timestamp, liquidation_long, liquidation_short,
-                   liquidation_usd, liquidation_ratio
+            SELECT time,
+                   aggregated_long_liquidation_usd as liquidation_long,
+                   aggregated_short_liquidation_usd as liquidation_short,
+                   (aggregated_long_liquidation_usd + aggregated_short_liquidation_usd) as liquidation_usd,
+                   aggregated_long_liquidation_usd / (aggregated_long_liquidation_usd + aggregated_short_liquidation_usd + 0.0001) as liquidation_ratio
             FROM cg_liquidation_aggregated_history
-            WHERE symbol = %s AND timestamp >= %s AND timestamp <= %s
+            WHERE symbol = %s AND time >= %s AND time <= %s
             """
 
             # Taker Volume data
             taker_volume_query = """
-            SELECT timestamp, buy_taker_volume, sell_taker_volume,
-                   taker_volume_ratio, volume_delta
+            SELECT time,
+                   aggregated_buy_volume_usd as buy_taker_volume,
+                   aggregated_sell_volume_usd as sell_taker_volume,
+                   aggregated_buy_volume_usd / (aggregated_buy_volume_usd + aggregated_sell_volume_usd + 0.0001) as taker_volume_ratio,
+                   (aggregated_buy_volume_usd - aggregated_sell_volume_usd) as volume_delta
             FROM cg_spot_aggregated_taker_volume_history
-            WHERE symbol = %s AND timestamp >= %s AND timestamp <= %s
+            WHERE symbol = %s AND time >= %s AND time <= %s
             """
 
             # Funding Rate data
             funding_query = """
-            SELECT timestamp, funding_rate, funding_rate_ma7,
-                   funding_rate_trend, predicted_funding
+            SELECT time, close as funding_rate
             FROM cg_funding_rate_history
-            WHERE symbol = %s AND timestamp >= %s AND timestamp <= %s
+            WHERE pair = %s AND time >= %s AND time <= %s
             """
 
             # Top Account Ratio data
             top_account_query = """
-            SELECT timestamp, long_short_ratio, long_account_ratio,
-                   short_account_ratio, ratio_change
+            SELECT time,
+                   top_account_long_short_ratio as long_short_ratio,
+                   top_account_long_percent as long_account_ratio,
+                   top_account_short_percent as short_account_ratio
             FROM cg_long_short_top_account_ratio_history
-            WHERE symbol = %s AND timestamp >= %s AND timestamp <= %s
+            WHERE pair = %s AND time >= %s AND time <= %s
             """
 
             # Global Account Ratio data
             global_account_query = """
-            SELECT timestamp, global_long_ratio, global_short_ratio,
-                   global_ratio_change, whale_ratio
+            SELECT time,
+                   global_long_short_ratio as global_long_ratio,
+                   global_long_percent as global_long_ratio,
+                   global_short_percent as global_short_ratio
             FROM cg_long_short_global_account_ratio_history
-            WHERE symbol = %s AND timestamp >= %s AND timestamp <= %s
+            WHERE pair = %s AND time >= %s AND time <= %s
             """
 
             # Spot Orderbook data
             orderbook_query = """
-            SELECT timestamp, bid_price, ask_price, bid_size, ask_size,
-                   spread, spread_pct, orderbook_imbalance
+            SELECT time,
+                   aggregated_bids_usd as bid_size,
+                   aggregated_asks_usd as ask_size,
+                   (aggregated_asks_usd - aggregated_bids_usd) / (aggregated_asks_usd + aggregated_bids_usd + 0.0001) as orderbook_imbalance
             FROM cg_spot_aggregated_ask_bids_history
-            WHERE symbol = %s AND timestamp >= %s AND timestamp <= %s
+            WHERE symbol = %s AND time >= %s AND time <= %s
             """
 
             # Futures Basis data
             basis_query = """
-            SELECT timestamp, basis_rate, basis_rate_ma, basis_volatility,
-                   annualized_basis, basis_trend
+            SELECT time,
+                   close_basis as basis_rate,
+                   close_change as basis_change
             FROM cg_futures_basis_history
-            WHERE symbol = %s AND timestamp >= %s AND timestamp <= %s
+            WHERE pair = %s AND time >= %s AND time <= %s
             """
 
             # Execute all queries
@@ -189,7 +205,11 @@ class ComprehensiveBacktester:
                 ('basis', basis_query)
             ]:
                 try:
-                    data = self.db_manager.execute_query(query, (symbol, start_date, end_date))
+                    # For funding, top_account, global_account, and basis, use pair instead of symbol
+                    if query_name in ['funding', 'top_account', 'global_account', 'basis']:
+                        data = self.db_manager.execute_query(query, (f"{symbol}USDT", start_timestamp, end_timestamp))
+                    else:
+                        data = self.db_manager.execute_query(query, (symbol, start_timestamp, end_timestamp))
                     if not data.empty:
                         additional_data[query_name] = data
                         print(f"✅ {query_name}: {len(data)} records")
@@ -199,12 +219,18 @@ class ComprehensiveBacktester:
                     print(f"❌ {query_name}: Error - {e}")
                     additional_data[query_name] = pd.DataFrame()
 
-            # Merge all data on timestamp
+            # Convert Unix timestamp to datetime
+            base_data['timestamp'] = pd.to_datetime(base_data['time'], unit='ms')
+
+            # Merge all data on time (using Unix timestamp)
             print("🔗 Merging all data sources...")
             comprehensive_data = base_data
 
             for table_name, table_data in additional_data.items():
                 if not table_data.empty:
+                    # Convert time to datetime for merging
+                    table_data['timestamp'] = pd.to_datetime(table_data['time'], unit='ms')
+
                     comprehensive_data = pd.merge(
                         comprehensive_data,
                         table_data,
@@ -314,11 +340,12 @@ class ComprehensiveBacktester:
         if all(col in df.columns for col in ['funding_rate', 'liquidation_ratio']):
             df['extreme_conditions'] = (np.abs(df['funding_rate']) > 0.01) & (df['liquidation_ratio'] > 0.7)
 
-        # Time features
-        df['hour'] = df['timestamp'].dt.hour
-        df['day_of_week'] = df['timestamp'].dt.dayofweek
-        df['month'] = df['timestamp'].dt.month
-        df['quarter'] = df['timestamp'].dt.quarter
+        # Time features (make sure timestamp exists)
+        if 'timestamp' in df.columns:
+            df['hour'] = df['timestamp'].dt.hour
+            df['day_of_week'] = df['timestamp'].dt.dayofweek
+            df['month'] = df['timestamp'].dt.month
+            df['quarter'] = df['timestamp'].dt.quarter
 
         # Lag features
         lag_periods = [1, 3, 6, 12]
